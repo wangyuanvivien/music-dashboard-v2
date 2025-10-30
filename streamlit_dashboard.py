@@ -22,7 +22,7 @@ def load_data(file_path):
         st.error(f"Error: The data file '{file_path}' was not found in the repository. Please ensure it is uploaded.")
         return pd.DataFrame()
 
-# --- 2. Data Cleaning and Preparation (Now includes Album Consolidation) ---
+# --- 2. Data Cleaning and Preparation (Includes Album Consolidation) ---
 @st.cache_data
 def prepare_data(df):
     """Cleans up and prepares data for visualization, including album consolidation."""
@@ -74,7 +74,7 @@ def prepare_data(df):
 
     return df
 
-# --- 3. Visualization Helper Functions (Unchanged) ---
+# --- 3. Visualization Helper Functions ---
 
 def generate_pie_chart(data, column_name):
     """Generates a Plotly Pie Chart for a given column."""
@@ -132,8 +132,8 @@ def generate_top_tracks_table(data, sort_column):
 
 # --- 4. New Album Dashboard Function ---
 def show_new_album_dashboard(df):
-    """Displays a detailed dashboard for the '属于' album."""
-    ALBUM_NAME = "属于"
+    """Displays a detailed dashboard for the '屬於' album."""
+    ALBUM_NAME = "屬於"
     
     if 'consolidated_album_title' not in df.columns:
         st.error("Error: Album consolidation failed. Cannot filter by consolidated title.")
@@ -166,10 +166,56 @@ def show_new_album_dashboard(df):
     
     cols = st.columns(2)
     for i, col_name in enumerate(detail_cols):
-        with cols[i % 2]:
-            generate_pie_chart(df_album, col_name)
+        try:
+            with cols[i % 2]:
+                generate_pie_chart(df_album, col_name)
+        except KeyError:
+             st.warning(f"Column '{col_name}' missing from the dataset.")
 
-# --- 5. Dashboard Page Function (Unchanged except for consolidation source) ---
+# --- 5. Song Details Page Function (RESTORED/REFINED) ---
+def show_song_details(df):
+    """Allows selection of a song and displays its full details."""
+    st.title("🔍 Individual Song Details")
+    
+    # Create a unique identifier for each track for the selection box
+    df['display_name'] = df['track_name'] + ' - ' + df['artist_credit_name'].fillna('Unknown Artist')
+    
+    # Allow selection
+    selected_track_name = st.selectbox(
+        "Select a Song to View Full Details:", 
+        options=sorted(df['display_name'].unique())
+    )
+
+    if selected_track_name:
+        # Filter the DataFrame to the selected song
+        # Use .copy() to avoid SettingWithCopyWarning if further changes were needed
+        selected_row = df[df['display_name'] == selected_track_name].iloc[0]
+        
+        st.markdown("---")
+        
+        # Display the main track information
+        st.header(selected_row['track_name'])
+        st.subheader(f"Artist: {selected_row['artist_credit_name']}")
+        
+        st.markdown("### All Feature Details")
+        
+        # Convert the Series (row) into a DataFrame suitable for displaying
+        details_df = selected_row.drop('display_name', errors='ignore').reset_index()
+        details_df.columns = ['Feature', 'Value']
+        
+        # Filter to only show non-null values for a clean view
+        details_df = details_df.dropna(subset=['Value'])
+        
+        # Display the details table
+        st.dataframe(
+            details_df, 
+            use_container_width=True, 
+            hide_index=True,
+            height=600 # Set a fixed height
+        )
+
+
+# --- 6. Dashboard Page Function ---
 def show_dashboard(df_filtered):
     """Displays the main visualization dashboard."""
     
@@ -227,7 +273,7 @@ def show_dashboard(df_filtered):
              st.warning(f"Column '{col_name}' missing from the dataset.")
 
 
-# --- 6. Main App Logic ---
+# --- 7. Main App Logic ---
 
 def main():
     st.title("🎶 Music Track Feature Analysis")
@@ -257,7 +303,7 @@ def main():
         st.sidebar.info(f"Filtered to **{len(df_filtered)}** rows based on Combined Key selection.")
 
     # --- Tabbed Interface ---
-    tab_dashboard, tab_album, tab_details = st.tabs(["📊 Main Dashboard", "💿 New Album: 属于", "🎵 Song Details"])
+    tab_dashboard, tab_album, tab_details = st.tabs(["📊 Main Dashboard", "💿 New Album: 屬於", "🎵 Song Details"])
 
     with tab_dashboard:
         show_dashboard(df_filtered)
@@ -266,7 +312,7 @@ def main():
         show_new_album_dashboard(df) # Use the full DF for album specific analysis
 
     with tab_details:
-        show_song_details(df)
+        show_song_details(df) # <-- THIS FUNCTION IS NOW DEFINED ABOVE
 
 
 if __name__ == "__main__":
