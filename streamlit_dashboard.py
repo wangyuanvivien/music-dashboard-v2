@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import numpy as np
+from collections import Counter
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -13,7 +14,7 @@ st.set_page_config(
 # --- 1. Load Data Function ---
 @st.cache_data
 def load_data(file_path):
-    """Loads the CSV data and performs initial cleanup."""
+    """Loads the CSV data."""
     try:
         df = pd.read_csv(file_path)
         return df
@@ -21,9 +22,10 @@ def load_data(file_path):
         st.error(f"Error: The data file '{file_path}' was not found in the repository. Please ensure it is uploaded.")
         return pd.DataFrame()
 
-# --- 2. Data Cleaning and Preparation ---
+# --- 2. Data Cleaning and Preparation (Now includes Album Consolidation) ---
+@st.cache_data
 def prepare_data(df):
-    """Cleans up and prepares data for visualization."""
+    """Cleans up and prepares data for visualization, including album consolidation."""
     if df.empty:
         return df
 
@@ -31,8 +33,9 @@ def prepare_data(df):
     df = df.replace(r'^\s*$', np.nan, regex=True)
     
     # Standardize 'combined_key'
-    if 'combined_key' in df.columns:
-        df['combined_key'] = df['combined_key'].replace(r'^\s*$', np.nan, regex=True)
+    for col in ['combined_key', 'album_title']:
+        if col in df.columns:
+            df[col] = df[col].replace(r'^\s*$', np.nan, regex=True)
 
     # Convert counts to integer
     for col in ['viewCount', 'likeCount', 'commentCount', 'popularity']:
@@ -40,9 +43,38 @@ def prepare_data(df):
             df[col] = pd.to_numeric(df[col], errors='coerce')
             df[col] = df[col].astype('Int64', errors='ignore')
             
+    # --- ALBUM CONSOLIDATION LOGIC ---
+    if 'album_title' in df.columns:
+        non_null_albums = df['album_title'].dropna().astype(str)
+        
+        # 1. Global Sub-content Frequency Count
+        all_sub_contents = []
+        for title in non_null_albums.unique():
+            parts = [part.strip() for part in title.split('|')]
+            valid_parts = [part for part in parts if part]
+            all_sub_contents.extend(valid_parts)
+        sub_content_counts = Counter(all_sub_contents)
+
+        # 2. Create Mapping
+        title_mapping = {}
+        for original_title in non_null_albums.unique():
+            sub_contents = [part.strip() for part in original_title.split('|')]
+            valid_sub_contents = [part for part in sub_contents if part]
+            
+            if valid_sub_contents:
+                # Find the sub-content with the highest global frequency count
+                consolidated_title = max(valid_sub_contents, key=lambda x: sub_content_counts[x])
+            else:
+                consolidated_title = original_title 
+            title_mapping[original_title] = consolidated_title
+
+        # 3. Apply Mapping
+        df['consolidated_album_title'] = df['album_title'].map(title_mapping)
+    # --- END ALBUM CONSOLIDATION ---
+
     return df
 
-# --- 3. Visualization Functions ---
+# --- 3. Visualization Helper Functions (Unchanged) ---
 
 def generate_pie_chart(data, column_name):
     """Generates a Plotly Pie Chart for a given column."""
@@ -98,49 +130,46 @@ def generate_top_tracks_table(data, sort_column):
         height=750
     )
 
-# --- 5. Song Details Page Function ---
-def show_song_details(df):
-    """Allows selection of a song and displays its full details."""
-    st.title("🔍 Individual Song Details")
+# --- 4. New Album Dashboard Function ---
+def show_new_album_dashboard(df):
+    """Displays a detailed dashboard for the '属于' album."""
+    ALBUM_NAME = "属于"
     
-    # Create a unique identifier for each track for the selection box
-    # Using track_name and artist_credit_name for better disambiguation
-    df['display_name'] = df['track_name'] + ' - ' + df['artist_credit_name'].fillna('Unknown Artist')
+    if 'consolidated_album_title' not in df.columns:
+        st.error("Error: Album consolidation failed. Cannot filter by consolidated title.")
+        return
+
+    df_album = df[df['consolidated_album_title'] == ALBUM_NAME].copy()
+
+    if df_album.empty:
+        st.warning(f"Album '{ALBUM_NAME}' not found in the dataset after consolidation.")
+        return
+
+    st.title(f"🎵 New Album Analysis: **{ALBUM_NAME}**")
+    st.subheader(f"Analyzing {len(df_album)} tracks from this album.")
     
-    # Allow selection
-    selected_track_name = st.selectbox(
-        "Select a Song to View Full Details:", 
-        options=sorted(df['display_name'].unique())
+    # 1. Album Track Listing
+    st.markdown("### Album Track Listing & Features")
+    track_list_cols = ['track_name', 'artist_credit_name', 'popularity', 'viewCount', 'ai_sentiment', 'combined_key']
+    
+    st.dataframe(
+        df_album[track_list_cols].sort_values(by='popularity', ascending=False).reset_index(drop=True),
+        use_container_width=True
     )
+    
+    st.markdown("---")
+    
+    # 2. Detailed Distribution Charts
+    st.markdown("### Detailed Feature Distribution")
+    
+    detail_cols = ['normalized_key', 'mood_sad', 'ai_theme', 'genre_ros']
+    
+    cols = st.columns(2)
+    for i, col_name in enumerate(detail_cols):
+        with cols[i % 2]:
+            generate_pie_chart(df_album, col_name)
 
-    if selected_track_name:
-        # Filter the DataFrame to the selected song
-        selected_row = df[df['display_name'] == selected_track_name].iloc[0]
-        
-        st.markdown("---")
-        
-        # Display the main track information
-        st.header(selected_row['track_name'])
-        st.subheader(f"Artist: {selected_row['artist_credit_name']}")
-        
-        st.markdown("### All Feature Details")
-        
-        # Convert the Series (row) into a DataFrame suitable for displaying
-        details_df = selected_row.drop('display_name').reset_index()
-        details_df.columns = ['Feature', 'Value']
-        
-        # Filter to only show non-null values for a clean view
-        details_df = details_df.dropna(subset=['Value'])
-        
-        # Display the details table
-        st.dataframe(
-            details_df, 
-            use_container_width=True, 
-            hide_index=True,
-            height=600 # Set a fixed height
-        )
-
-# --- 6. Dashboard Page Function ---
+# --- 5. Dashboard Page Function (Unchanged except for consolidation source) ---
 def show_dashboard(df_filtered):
     """Displays the main visualization dashboard."""
     
@@ -198,12 +227,12 @@ def show_dashboard(df_filtered):
              st.warning(f"Column '{col_name}' missing from the dataset.")
 
 
-# --- 7. Main App Logic ---
+# --- 6. Main App Logic ---
 
 def main():
     st.title("🎶 Music Track Feature Analysis")
 
-    # Load and Prepare Data
+    # Load and Prepare Data (Consolidation happens here)
     FILE_NAME = 'final_modified_tracks.csv'
     df = load_data(FILE_NAME)
     df = prepare_data(df)
@@ -215,7 +244,7 @@ def main():
     st.sidebar.header("Data Filters (Applies to Dashboard)")
     
     # Filter for Combined Key
-    available_keys = df['combined_key'].dropna().unique()
+    available_keys = df['combined_key'].dropna().unique() if 'combined_key' in df.columns else []
     selected_keys = st.sidebar.multiselect(
         "Filter by Combined Key", 
         options=available_keys, 
@@ -228,13 +257,15 @@ def main():
         st.sidebar.info(f"Filtered to **{len(df_filtered)}** rows based on Combined Key selection.")
 
     # --- Tabbed Interface ---
-    tab_dashboard, tab_details = st.tabs(["📊 Main Dashboard", "🎵 Song Details"])
+    tab_dashboard, tab_album, tab_details = st.tabs(["📊 Main Dashboard", "💿 New Album: 属于", "🎵 Song Details"])
 
     with tab_dashboard:
         show_dashboard(df_filtered)
 
+    with tab_album:
+        show_new_album_dashboard(df) # Use the full DF for album specific analysis
+
     with tab_details:
-        # The Song Details tab uses the full, unfiltered dataframe for selection
         show_song_details(df)
 
 
